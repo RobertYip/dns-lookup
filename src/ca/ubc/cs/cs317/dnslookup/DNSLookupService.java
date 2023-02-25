@@ -129,14 +129,14 @@ public class DNSLookupService {
 
         /* Query rootserver */
         InetAddress server = null;
-        List<String> serverList = new ArrayList<String>(rootServers);
-        int randomServer = random.nextInt(serverList.size());
-        String startingRootServer = serverList.remove(randomServer);
+        List<ResourceRecord> serverList = cache.getBestNameservers(question);
         try {
-            server = InetAddress.getByName(startingRootServer);
+            String firstServer = serverList.remove(0).getTextResult();
+            server = InetAddress.getByName(firstServer);
         } catch (Exception e){
         }
 
+        List<InetAddress> triedServers = new ArrayList<>();
         /* Iterate servers */
         while (!containsAnswer(ans, question)){
             ans = individualQueryProcess(question, server);
@@ -149,15 +149,34 @@ public class DNSLookupService {
                     return null;
                 } else {
                     try {
-                        server = InetAddress.getByName(serverList.remove(0));
+                        String strServer =serverList.remove(0).getTextResult();
+                        server = InetAddress.getByName(strServer);
                         continue;
                     } catch (Exception e){
-                        System.out.println(" Line151 Error");
+                        // catch for getByName; do nothing
                     }
                 }
             }
 
             ResourceRecord rr = ans.iterator().next();
+            try {
+                InetAddress serverToTry = null;
+                if (rr.getRecordType().getCode() == 1){
+                    serverToTry = rr.getInetResult();
+                } else if (rr.getRecordType().getCode() == 2){
+                    String hostName = rr.getTextResult();
+                    serverToTry = InetAddress.getByName(hostName);
+                }
+                while (triedServers.contains(serverToTry)) {
+                    rr = ans.iterator().next();
+                    ans.remove(rr);
+                }
+            } catch(NoSuchElementException  e){
+                // all servers exhausted
+                return cacheAns;
+            } catch(Exception e){
+                // getInetResult exception, do nothing
+            }
             int rtCode = rr.getRecordType().getCode();
             if (rtCode == 1){
                 // A
@@ -180,6 +199,7 @@ public class DNSLookupService {
 
             }
             if (server == null) break;
+            triedServers.add(server);
             ans.clear();
         }
         return null;
