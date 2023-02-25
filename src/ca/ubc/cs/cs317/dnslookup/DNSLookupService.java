@@ -1,13 +1,8 @@
 package ca.ubc.cs.cs317.dnslookup;
 
-import java.net.DatagramSocket;
-import java.net.InetAddress;
-import java.net.SocketException;
-import java.net.UnknownHostException;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Random;
-import java.util.Set;
+import java.io.IOException;
+import java.net.*;
+import java.util.*;
 
 public class DNSLookupService {
 
@@ -21,6 +16,23 @@ public class DNSLookupService {
     private final Random random = new Random();
     private final DNSVerbosePrinter verbose;
     private final DatagramSocket socket;
+
+    //todo rather than using String[], maybe use arrayList
+    private static final List<String> rootServers = Arrays.asList(
+            "a.root-servers.net",
+            "b.root-servers.net",
+            "c.root-servers.net",
+            "d.root-servers.net",
+            "e.root-servers.net",
+            "f.root-servers.net",
+            "g.root-servers.net",
+            "h.root-servers.net",
+            "i.root-servers.net",
+            "j.root-servers.net",
+            "k.root-servers.net",
+            "l.root-servers.net",
+            "m.root-servers.net"
+    );
 
     /**
      * Creates a new lookup service. Also initializes the datagram socket object with a default timeout.
@@ -103,11 +115,74 @@ public class DNSLookupService {
      *
      *  @param question Host name and record type/class to be used for the query.
      */
+    /* TODO: To be implemented by the student */
     public Collection<ResourceRecord> iterativeQuery(DNSQuestion question)
             throws DNSErrorException {
         Set<ResourceRecord> ans = new HashSet<>();
-        /* TODO: To be implemented by the student */
-        return ans;
+        /* Available in cache */
+        Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
+        for (ResourceRecord cacheResult : cacheResults){
+            if (!cacheResult.isExpired()) ans.add(cacheResult);
+        }
+        // if (!ans.isEmpty()) return ans;
+        if (containsAnswer(ans, question)) return ans;
+
+        /* Query rootserver */
+        InetAddress server = null;
+        List<String> serverList = new ArrayList<String>(rootServers);
+        int randomServer = random.nextInt(serverList.size());
+        String startingRootServer = serverList.remove(randomServer);
+        try {
+            server = InetAddress.getByName(startingRootServer);
+        } catch (Exception e){
+        }
+
+        /* Iterate servers */
+        while (!containsAnswer(ans, question)){
+            ans = individualQueryProcess(question, server);
+            List<ResourceRecord> cacheAns = cache.getCachedResults(question);
+            if (containsAnswer(cacheAns, question)) return cacheAns;
+
+            if (ans == null) {
+                // Pick a different server
+                if (serverList.size() == 0) {
+                    return null;
+                } else {
+                    try {
+                        server = InetAddress.getByName(serverList.remove(0));
+                        continue;
+                    } catch (Exception e){
+                        System.out.println(" Line151 Error");
+                    }
+                }
+            }
+
+            ResourceRecord rr = ans.iterator().next();
+            int rtCode = rr.getRecordType().getCode();
+            if (rtCode == 1){
+                // A
+                server = rr.getInetResult();
+            } else if (rtCode == 2){
+                // NS
+                String hostName = rr.getTextResult();
+                try {
+                    server = InetAddress.getByName(hostName);
+                } catch (Exception e) {
+                }
+            } else if (rtCode == 5){
+                // CNAME
+                return cacheAns;
+            } else if (rtCode == 15){
+                // MX
+            } else if (rtCode == 28){
+                // AAAA
+            } else {
+
+            }
+            if (server == null) break;
+            ans.clear();
+        }
+        return null;
     }
 
     /**
@@ -127,10 +202,40 @@ public class DNSLookupService {
      * received in the response.
      * @throws DNSErrorException if the Rcode in the response is non-zero
      */
+    /* TODO: To be implemented by the student */
     public Set<ResourceRecord> individualQueryProcess(DNSQuestion question, InetAddress server)
             throws DNSErrorException {
-        /* TODO: To be implemented by the student */
-        return null;
+        int attemptNumber = MAX_QUERY_ATTEMPTS;
+
+        /* Build and Send */
+        DNSMessage msg = buildQuery(question);
+        byte[] msgBuf = msg.getUsed();
+        DatagramPacket packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
+
+        while (true) {
+            if (attemptNumber <= 0) return null;
+
+            try {
+                verbose.printQueryToSend(question, server, msg.getID());
+                socket.send(packet);
+
+                // allocate space and receive
+                byte[] buf = new byte[512];
+                packet = new DatagramPacket(buf, buf.length);
+                socket.receive(packet);
+
+                break;
+            } catch (SocketTimeoutException e) {
+                attemptNumber--;
+            } catch (IOException e) {
+                throw new DNSErrorException("socket receive fail: " + e);
+            }
+        }
+        byte[] data = packet.getData();
+        int dataLength = packet.getLength();
+        DNSMessage fullmsg = new DNSMessage(data, dataLength);
+        Set<ResourceRecord> responses = processResponse(fullmsg);
+        return responses;
     }
 
     /**
@@ -143,9 +248,15 @@ public class DNSLookupService {
      * @param question    Host name and record type/class to be used for the query.
      * @return The DNSMessage containing the query.
      */
+    /* TODO: To be implemented by the student */
     public DNSMessage buildQuery(DNSQuestion question) {
-        /* TODO: To be implemented by the student */
-        return new DNSMessage((short)23);
+        short randomId = (short)random.nextInt(65536);
+        DNSMessage message = new DNSMessage(randomId);
+        message.setQR(false); // this message is a query
+        message.addQuestion(question);
+        // assert position is correct TODO remove if issue
+        assert message.getUsed().length == message.buffer.position();
+        return message;
     }
 
     /**
@@ -161,9 +272,51 @@ public class DNSLookupService {
      * @return A set of all resource records received in the response.
      * @throws DNSErrorException if the Rcode value in the reply header is non-zero
      */
+    /* TODO: To be implemented by the student */
     public Set<ResourceRecord> processResponse(DNSMessage message) throws DNSErrorException {
-        /* TODO: To be implemented by the student */
-        return null;
+        if (message.getRcode() != 0) throw new DNSErrorException("non-zero R-code");
+        int id = message.getID();
+        boolean aa = message.getAA();
+        int errorCode = message.getOpcode();
+        verbose.printResponseHeaderInfo(id, aa, errorCode);
+        Set<ResourceRecord> ans = new HashSet<>();
+        try {
+            DNSQuestion q = message.getQuestion();
+            int anCount = message.getANCount();
+            verbose.printAnswersHeader(anCount);
+            while (anCount > 0){
+                ResourceRecord rr = message.getRR();
+                verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
+                ans.add(rr);
+                cache.addResult(rr);
+                anCount--;
+            }
+
+            int nsCount = message.getNSCount();
+            verbose.printNameserversHeader(nsCount);
+            while (nsCount > 0){
+                ResourceRecord rr = message.getRR();
+                verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
+                ans.add(rr);
+                cache.addResult(rr);
+                nsCount--;
+            }
+
+            int arCount = message.getARCount();
+            verbose.printAdditionalInfoHeader(arCount);
+            while (arCount > 0){
+                ResourceRecord rr = message.getRR();
+                verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
+                ans.add(rr);
+                cache.addResult(rr);
+                arCount--;
+            }
+
+        } catch(Exception e){
+            // break
+            // include out of bounds for message.getRR
+        }
+        return ans;
     }
 
     public static class DNSErrorException extends Exception {
