@@ -124,7 +124,6 @@ public class DNSLookupService {
         for (ResourceRecord cacheResult : cacheResults){
             if (!cacheResult.isExpired()) ans.add(cacheResult);
         }
-        // if (!ans.isEmpty()) return ans;
         if (containsAnswer(ans, question)) return ans;
 
         /* Query rootserver */
@@ -142,6 +141,11 @@ public class DNSLookupService {
             ans = individualQueryProcess(question, server);
             List<ResourceRecord> cacheAns = cache.getCachedResults(question);
             if (containsAnswer(cacheAns, question)) return cacheAns;
+            for (ResourceRecord ca : cacheAns){
+                if (ca.getRecordType()==RecordType.CNAME) {
+                    return cacheAns;
+                }
+            }
 
             if (ans == null) {
                 // Pick a different server
@@ -228,14 +232,14 @@ public class DNSLookupService {
         int attemptNumber = MAX_QUERY_ATTEMPTS;
 
         /* Build and Send */
-        DNSMessage msg = buildQuery(question);
-        byte[] msgBuf = msg.getUsed();
-        DatagramPacket packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
-
+        DatagramPacket packet = null;
         while (true) {
             if (attemptNumber <= 0) return null;
 
             try {
+                DNSMessage msg = buildQuery(question);
+                byte[] msgBuf = msg.getUsed();
+                packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
                 verbose.printQueryToSend(question, server, msg.getID());
                 socket.send(packet);
 
@@ -294,7 +298,7 @@ public class DNSLookupService {
      */
     /* TODO: To be implemented by the student */
     public Set<ResourceRecord> processResponse(DNSMessage message) throws DNSErrorException {
-        if (message.getRcode() != 0) throw new DNSErrorException("non-zero R-code");
+        if (message.getRcode() != 0) throw new DNSErrorException("R-code is " + message.getRcode());
         int id = message.getID();
         boolean aa = message.getAA();
         int errorCode = message.getOpcode();
