@@ -18,22 +18,36 @@ public class DNSLookupService {
     private final DatagramSocket socket;
 
     //todo rather than using String[], maybe use arrayList
-    private static final List<String> rootServers = Arrays.asList(
-            "a.root-servers.net",
-            "b.root-servers.net",
-            "c.root-servers.net",
-            "d.root-servers.net",
-            "e.root-servers.net",
-            "f.root-servers.net",
-            "g.root-servers.net",
-            "h.root-servers.net",
-            "i.root-servers.net",
-            "j.root-servers.net",
-            "k.root-servers.net",
-            "l.root-servers.net",
-            "m.root-servers.net"
-    );
-
+//    private static final List<String> rootServers = Arrays.asList(
+//            "a.root-servers.net",
+//            "b.root-servers.net",
+//            "c.root-servers.net",
+//            "d.root-servers.net",
+//            "e.root-servers.net",
+//            "f.root-servers.net",
+//            "g.root-servers.net",
+//            "h.root-servers.net",
+//            "i.root-servers.net",
+//            "j.root-servers.net",
+//            "k.root-servers.net",
+//            "l.root-servers.net",
+//            "m.root-servers.net"
+//    );
+    private static final String[][] rootServers = {
+            { "a.root-servers.net", "198.41.0.4" },
+            { "b.root-servers.net", "199.9.14.201" },
+            { "c.root-servers.net", "192.33.4.12" },
+            { "d.root-servers.net", "199.7.91.13" },
+            { "e.root-servers.net", "192.203.230.10" },
+            { "f.root-servers.net", "192.5.5.241" },
+            { "g.root-servers.net", "192.112.36.4" },
+            { "h.root-servers.net", "198.97.190.53" },
+            { "i.root-servers.net", "192.36.148.17" },
+            { "j.root-servers.net", "192.58.128.30" },
+            { "k.root-servers.net", "193.0.14.129" },
+            { "l.root-servers.net", "199.7.83.42" },
+            { "m.root-servers.net", "202.12.27.33" }
+    };
     /**
      * Creates a new lookup service. Also initializes the datagram socket object with a default timeout.
      *
@@ -129,6 +143,7 @@ public class DNSLookupService {
         /* Query rootserver */
         InetAddress server = null;
         List<ResourceRecord> serverList = cache.getBestNameservers(question);
+        System.out.println(serverList.get(0).getTextResult());
         try {
             String firstServer = serverList.remove(0).getTextResult();
             server = InetAddress.getByName(firstServer);
@@ -232,34 +247,40 @@ public class DNSLookupService {
         int attemptNumber = MAX_QUERY_ATTEMPTS;
 
         /* Build and Send */
+        DNSMessage responseMsg;
         DatagramPacket packet = null;
-        while (true) {
-            if (attemptNumber <= 0) return null;
+        DNSMessage msg = buildQuery(question);
+        byte[] msgBuf = msg.getUsed();
+        packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
 
+        while (attemptNumber > 0) {
             try {
-                DNSMessage msg = buildQuery(question);
-                byte[] msgBuf = msg.getUsed();
-                packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
                 verbose.printQueryToSend(question, server, msg.getID());
                 socket.send(packet);
-
                 // allocate space and receive
                 byte[] buf = new byte[512];
                 packet = new DatagramPacket(buf, buf.length);
-                socket.receive(packet);
-
-                break;
+                while (true) {
+                    socket.receive(packet);
+                    try {
+                        byte[] data = packet.getData();
+                        int dataLength = packet.getLength();
+                        responseMsg = new DNSMessage(data, dataLength);
+                        if (responseMsg.getID() == msg.getID()) {
+                            Set<ResourceRecord> responses = processResponse(responseMsg);
+                            return responses;
+                        }
+                    } catch (Exception e){
+                        // not response; ignore
+                    }
+                }
             } catch (SocketTimeoutException e) {
                 attemptNumber--;
             } catch (IOException e) {
                 throw new DNSErrorException("socket receive fail: " + e);
             }
         }
-        byte[] data = packet.getData();
-        int dataLength = packet.getLength();
-        DNSMessage fullmsg = new DNSMessage(data, dataLength);
-        Set<ResourceRecord> responses = processResponse(fullmsg);
-        return responses;
+        return null;
     }
 
     /**
@@ -272,13 +293,11 @@ public class DNSLookupService {
      * @param question    Host name and record type/class to be used for the query.
      * @return The DNSMessage containing the query.
      */
-    /* TODO: To be implemented by the student */
     public DNSMessage buildQuery(DNSQuestion question) {
         short randomId = (short)random.nextInt(65536);
         DNSMessage message = new DNSMessage(randomId);
         message.setQR(false); // this message is a query
         message.addQuestion(question);
-        // assert position is correct TODO remove if issue
         assert message.getUsed().length == message.buffer.position();
         return message;
     }
@@ -296,7 +315,6 @@ public class DNSLookupService {
      * @return A set of all resource records received in the response.
      * @throws DNSErrorException if the Rcode value in the reply header is non-zero
      */
-    /* TODO: To be implemented by the student */
     public Set<ResourceRecord> processResponse(DNSMessage message) throws DNSErrorException {
         if (message.getRcode() != 0) throw new DNSErrorException("R-code is " + message.getRcode());
         int id = message.getID();

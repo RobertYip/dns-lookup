@@ -1,49 +1,56 @@
 package ca.ubc.cs.cs317.dnslookup;
 
-//import com.sun.xml.internal.ws.util.StringUtils;
-
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.stream.IntStream;
 
 public class DNSMessage {
     public static final int MAX_DNS_MESSAGE_LENGTH = 512;
-
-    // The offset into the message where the header ends and the data begins.
-    public final static int DataOffset = 12;
-
-    // Opcode for a standard query
-    public final static int QUERY = 0;
-
-    /**
-     * Private Fields here
-     */
-    private final int HEADER_SIZE = 12;
-    private final ByteBuffer buffer;
-
-    private int qdcount;
-    private int ancount;
-    private int nscount;
-    private int arcount;
-    private final HashMap<String, Integer> hm = new HashMap<>();
+    public static final int IDOffset = 0;
+    public static final int CMDOffset = 2;
+    public static final int QDCountOffset = 4;
+    public static final int ANCountOffset = 6;
+    public static final int NSCountOffset = 8;
+    public static final int ARCountOffset = 10;
+    public static final int DataOffset = 12;
+    public static final int QRMask = 0b1000000000000000;
+    public static final int OpcodeMask = 0b0111100000000000;
+    public static final int AAMask = 0b0000010000000000;
+    public static final int RDMask = 0b0000000100000000;
+    public static final int RAMask = 0b0000000010000000;
+    public static final int RcodeMask = 0b0000000000001111;
+    public static final int TCMask = 0b0000001000000000;
+    public static final int ShortMask = 0xffff;
+    public static final int PtrMask = 0xc0;
+    public static final int PtrShortMask = 0xc000;
+    public static final int PtrHOBMask = 0x3f;
+    public static final int PtrHOBShift = 8;
+    public static final int OpcodeShift = 11;
+    public static final int ByteMask = 0xff;
+    public static final int QUERY = 0;
+    private final Map<String, Integer> nameToPosition = new HashMap<>();
+    private final Map<Integer, String> positionToName = new HashMap<>();
+    public final ByteBuffer buffer;
 
     /**
      * Initializes an empty DNSMessage with the given id.
      *
      * @param id The id of the message.
      */
-
     public DNSMessage(short id) {
         this.buffer = ByteBuffer.allocate(MAX_DNS_MESSAGE_LENGTH);
-        this.buffer.putShort(0, id);
-
-        // set position to after header
-        this.buffer.position(HEADER_SIZE);
-        this.qdcount = 0;
-        this.ancount = 0;
-        this.nscount = 0;
-        this.arcount = 0;
+        short zero = 0;
+        buffer.putShort(IDOffset, id);
+        buffer.putShort(CMDOffset, zero);
+        buffer.putShort(QDCountOffset, zero);
+        buffer.putShort(ANCountOffset, zero);
+        buffer.putShort(NSCountOffset, zero);
+        buffer.putShort(ARCountOffset, zero);
+        buffer.position(DataOffset);
     }
 
     /**
@@ -53,185 +60,159 @@ public class DNSMessage {
      * @param length The length of the data in the array
      */
     public DNSMessage(byte[] recvd, int length) {
-        this.buffer = ByteBuffer.wrap(recvd, 0, length);
-        // update position to after wrap
-        this.buffer.position(HEADER_SIZE);
-        this.qdcount = getQDCount();
-        this.ancount = getANCount();
-        this.nscount = getNSCount();
-        this.arcount = getARCount();
+        buffer = ByteBuffer.wrap(recvd, 0, length);
+        buffer.position(DataOffset);
     }
 
     /**
      * Getters and setters for the various fixed size and fixed location fields of a DNSMessage
      */
     public int getID() {
-        return this.buffer.getShort(0) & 0x0000FFFF;
+        return buffer.getShort(IDOffset) & ShortMask;
     }
 
     public void setID(int id) {
-        this.buffer.putShort(0, (short) id);
+        buffer.putShort(IDOffset, (short) (id & ShortMask));
     }
 
     public boolean getQR() {
-        byte b = this.buffer.get(2);
-        return (b & 0b10000000) >> 7 == 1;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & QRMask) == QRMask;
     }
 
     public void setQR(boolean qr) {
-        byte b = this.buffer.get(2);
-        b = qr ? (byte) (b | 0b10000000) : (byte) (b & 0b01111111);
-        this.buffer.put(2, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = qr ? (cmd | QRMask) : (cmd & ~QRMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public boolean getAA() {
-        byte b = this.buffer.get(2);
-        return (b & 0b00000100) >> 2 == 1;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & AAMask) == AAMask;
     }
 
     public void setAA(boolean aa) {
-        byte b = this.buffer.get(2);
-        b = aa ? (byte) (b | 0b00000100) : (byte) (b & 0b111111011);
-        this.buffer.put(2, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = aa ? (cmd | AAMask) : (cmd & ~AAMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public int getOpcode() {
-        byte b = this.buffer.get(2);
-        return (b & 0b01111000) >> 3;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & OpcodeMask) >> OpcodeShift;
     }
 
     public void setOpcode(int opcode) {
-        byte b = this.buffer.get(2);
-        // use mask to clear opcode bits to 0 before setting value
-        b = (byte) ((byte) opcode << 3 | (b & 0b10000111));
-        this.buffer.put(2, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = (cmd & ~OpcodeMask) | (opcode << OpcodeShift);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public boolean getTC() {
-        byte b = this.buffer.get(2);
-        return (b & 0b00000010) >> 1 == 1;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & TCMask) == TCMask;
     }
 
     public void setTC(boolean tc) {
-        byte b = this.buffer.get(2);
-        b = tc ? (byte) (b | 0b00000010) : (byte) (b & 0b11111101);
-        this.buffer.put(2, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = tc ? (cmd | TCMask) : (cmd & ~TCMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public boolean getRD() {
-        byte b = this.buffer.get(2);
-        return (b & 0b00000001) == 1;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & RDMask) == RDMask;
     }
 
     public void setRD(boolean rd) {
-        byte b = this.buffer.get(2);
-        b = rd ? (byte) (b | 0b00000001) : (byte) (b & 0b11111110);
-        this.buffer.put(2, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = rd ? (cmd | RDMask) : (cmd & ~RDMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public boolean getRA() {
-        byte b = this.buffer.get(3);
-        return (b & 0b10000000) >> 7 == 1;
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & RAMask) == RAMask;
     }
 
     public void setRA(boolean ra) {
-        byte b = this.buffer.get(3);
-        b = ra ? (byte) (b | 0b10000000) : (byte) (b & 0b01111111);
-        this.buffer.put(3, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = ra ? (cmd | RAMask) : (cmd & ~RAMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public int getRcode() {
-        byte b = this.buffer.get(3);
-        return (b & 0b00001111);
+        int cmd = buffer.getShort(CMDOffset);
+        return (cmd & RcodeMask);
     }
 
     public void setRcode(int rcode) {
-        byte b = this.buffer.get(3);
-        // use mask to clear rcode bits to 0 before setting value
-        b = (byte) ((byte) rcode | (b & 0b11110000));
-        this.buffer.put(3, b);
+        int cmd = buffer.getShort(CMDOffset);
+        cmd = (cmd & ~RcodeMask) | (rcode & RcodeMask);
+        buffer.putShort(CMDOffset, (short) cmd);
     }
 
     public int getQDCount() {
-        return (int) this.buffer.getShort(4) & 0xFFFF;
+        return buffer.getShort(QDCountOffset) & ShortMask;
     }
 
     public void setQDCount(int count) {
-        this.buffer.putShort(4, (short) count);
+        buffer.putShort(QDCountOffset, (short) count);
     }
 
     public int getANCount() {
-        return (int) this.buffer.getShort(6) & 0xFFFF;
-    }
-
-    public void setANCount(int count) {
-        this.buffer.putShort(6, (short) count);
+        return buffer.getShort(ANCountOffset) & ShortMask;
     }
 
     public int getNSCount() {
-        return (int) this.buffer.getShort(8) & 0xFFFF;
-    }
-
-    public void setNSCount(int count) {
-        this.buffer.putShort(8, (short) count);
+        return buffer.getShort(NSCountOffset) & ShortMask;
     }
 
     public int getARCount() {
-        return (int) this.buffer.getShort(10) & 0xFFFF;
+        return buffer.getShort(ARCountOffset) & ShortMask;
+    }
+
+    public void setANCount(int count) {
+        buffer.putShort(ANCountOffset, (short) count);
+    }
+
+    public void setNSCount(int count) {
+        buffer.putShort(NSCountOffset, (short) count);
     }
 
     public void setARCount(int count) {
-        this.buffer.putShort(10, (short) count);
+        buffer.putShort(ARCountOffset, (short) count);
     }
 
     /**
-     * Return the name at the current position() of the buffer.
+     * Return the name at the current position() of the buffer.  This method is provided for you,
+     * but you should ensure that you understand what it does and how it does it.
      * <p>
-     * The encoding of names in DNS messages is a bit tricky.
-     * You should read section 4.1.4 of RFC 1035 very, very carefully.  Then you should draw a picture of
-     * how some domain names might be encoded.  Once you have the data structure firmly in your mind, then
-     * design the code to read names.
+     * The trick is to keep track of all the positions in the message that contain names, since
+     * they can be the target of a pointer.  We do this by storing the mapping of position to
+     * name in the positionToName map.
      *
      * @return The decoded name
      */
     public String getName() {
-        String name = "";
-        int currPos = this.buffer.position();
-        int nextPos = 0;
-        while (this.buffer.get(currPos) != 0) {
-            if ((this.buffer.get(currPos) & 0b11000000) == 0b11000000) {
-                // pointer condition: first bits (1, 1)
-                if (nextPos == 0) {
-                    nextPos = currPos + 2;
-                }
-                currPos = this.buffer.getShort(currPos) & 0x3FFF;
-            }
-            // default condition
-            // get next numChar characters
-            int numChar = this.buffer.get(currPos);
-
-            // move to first char of name
-            currPos++;
-
-            for (int i = 0; i < numChar; i++) {
-                name += (char) this.buffer.get(currPos + i);
-            }
-            name += ".";
-            currPos += numChar;
+        // Remember the starting position for updating the name cache
+        int start = buffer.position();
+        int len = buffer.get() & ByteMask;
+        if (len == 0) return "";
+        if ((len & PtrMask) == PtrMask) {  // This is a pointer
+            int pointer = ((len & PtrHOBMask) << PtrHOBShift) | (buffer.get() & ByteMask);
+            String suffix = positionToName.get(pointer);
+            assert suffix != null;
+            positionToName.put(start, suffix);
+            return suffix;
         }
-
-        // remove last "."
-        if (!name.isEmpty()) {
-            name = name.substring(0, name.length() - 1);
-        }
-
-        if (nextPos == 0) {
-            this.buffer.position(currPos + 1);
-        } else {
-            this.buffer.position(nextPos);
-        }
-
-        return name;
+        byte[] bytes = new byte[len];
+        buffer.get(bytes, 0, len);
+        String label = new String(bytes, StandardCharsets.UTF_8);
+        String suffix = getName();
+        String answer = suffix.isEmpty() ? label : label + "." + suffix;
+        positionToName.put(start, answer);
+        return answer;
     }
 
     /**
@@ -240,14 +221,14 @@ public class DNSMessage {
      * @return The string representation of the message
      */
     public String toString() {
-        // Remember the current position of the buffer so that we can put it back
+        // Remember the current position of the buffer so we can put it back
         // Since toString() can be called by the debugger, we want to be careful to not change
         // the position in the buffer.  We remember what it was and put it back when we are done.
         int end = buffer.position();
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("ID: ").append(getID()).append(' ');
-            sb.append("QR: ").append(getQR() ? "Response" : "Query").append(' ');
+            sb.append("QR: ").append(getQR()).append(' ');
             sb.append("OP: ").append(getOpcode()).append(' ');
             sb.append("AA: ").append(getAA()).append('\n');
             sb.append("TC: ").append(getTC()).append(' ');
@@ -309,15 +290,12 @@ public class DNSMessage {
      * @return The decoded question
      */
     public DNSQuestion getQuestion() {
-        // name
-        String hostname = this.getName();
-        // rt
-        RecordType rt = RecordType.getByCode(this.buffer.getShort());
-
-        // rc
-        RecordClass rc = RecordClass.getByCode(this.buffer.getShort());
-
-        return new DNSQuestion(hostname, rt, rc);
+        String hostname = getName();
+        short type = buffer.getShort();
+        short klass = buffer.getShort();
+        RecordType rtype = RecordType.getByCode(type);
+        RecordClass rklass = RecordClass.getByCode(klass);
+        return new DNSQuestion(hostname, rtype, rklass);
     }
 
     /**
@@ -327,62 +305,65 @@ public class DNSMessage {
      * @return The decoded resource record
      */
     public ResourceRecord getRR() {
-        String name = "";
-        // ANSWER
-        DNSQuestion answer = getQuestion();
-        // TTL (signed 32-bit int)
-        int ttl = this.buffer.getInt();
-
-        // RDLENGTH not used; skip
-        this.buffer.getShort();
-
-        // RRDATA by type
-        int type = answer.getRecordType().getCode();
-        if (type == 2 || type == 5) {
-            // NS, CNAME
-            name = getName();
-        } else if (type == 1) {
-            // A
-            int pos = this.buffer.position() - 1;
-
-            for (int i = 0; i < 4; i++) {
-                name += ((this.buffer.getShort(pos + i)) & 0xFF) + ".";
-            }
-            name = name.substring(0, name.length() - 1);
-            InetAddress ip = null;
+        String cname;
+        String mxname;
+        String nsname;
+        byte[] rdata;
+        ResourceRecord rr;
+        String owner = getName();
+        short type = buffer.getShort();
+        short klass = buffer.getShort();
+        int ttl = buffer.getInt();
+        RecordType rtype = RecordType.getByCode(type);
+        RecordClass rklass = RecordClass.getByCode(klass);
+        DNSQuestion question = new DNSQuestion(owner, rtype, rklass);
+        int rdatalen = buffer.getShort() & ShortMask;
+        int startpos = buffer.position();
+        if (rtype == RecordType.A && rklass == RecordClass.IN) {
+            rdata = new byte[4];
+            buffer.get(rdata, 0, 4);
+            InetAddress address;
             try {
-                ip = InetAddress.getByName(name);
-            } catch (Exception e) {
-                // do nothing for error, assume correct
+                address = InetAddress.getByAddress(rdata);
+                rr = new ResourceRecord(question, ttl, address);
+            } catch (UnknownHostException e) {
+                rr = null;
             }
-            this.buffer.position(this.buffer.position() + 4);
-
-            return new ResourceRecord(answer, ttl, ip);
-        } else if (type == 28) {
-            // AAAA
-            byte[] byteArray = new byte[2];
-            for (int i = 0; i < 8; i++) {
-                byteArray[0] = this.buffer.get();
-                byteArray[1] = this.buffer.get();
-                name += byteArrayToHexString(byteArray) + ":";
-            }
-            name = name.substring(0, name.length() - 1);
-            InetAddress ip = null;
+        } else if (rtype == RecordType.AAAA && rklass == RecordClass.IN) {
+            rdata = new byte[16];
+            buffer.get(rdata, 0, 16);
+            InetAddress address;
             try {
-                ip = InetAddress.getByName(name);
-            } catch (Exception e) {
-                // do nothing for error, assume correct
+                address = InetAddress.getByAddress(rdata);
+                rr = new ResourceRecord(question, ttl, address);
+            } catch (UnknownHostException e) {
+                rr = null;
             }
-            return new ResourceRecord(answer, ttl, ip);
-        } else if (type == 15) {
-            // MX
-            this.buffer.getShort(); // skip PREFERENCE short
-            name = getName();
+        } else if (rtype == RecordType.CNAME) {
+            cname = getName();
+            rr = new ResourceRecord(question, ttl, cname);
+        } else if (rtype == RecordType.MX) {
+            //noinspection unused We ignore mx preference fields
+            int pref = buffer.getShort() & ShortMask;
+            mxname = getName();
+            rr = new ResourceRecord(question, ttl, mxname);
+        } else if (rtype == RecordType.NS) {
+            nsname = getName();
+            rr = new ResourceRecord(question, ttl, nsname);
+        } else if (rtype == RecordType.SOA) {
+            rdata = new byte[rdatalen];
+            buffer.get(rdata, 0, rdatalen);
+            String hex = byteArrayToHexString(rdata);
+            rr = new ResourceRecord(question, ttl, hex);
         } else {
-            // Other types not implemented
+            rdata = new byte[rdatalen];
+            buffer.get(rdata, 0, rdatalen);
+            String hex = byteArrayToHexString(rdata);
+            rr = new ResourceRecord(question, ttl, hex);
         }
-
-        return new ResourceRecord(answer, ttl, name);
+        int endpos = buffer.position();
+        assert endpos - startpos == rdatalen;
+        return rr;
     }
 
     /**
@@ -403,7 +384,7 @@ public class DNSMessage {
      * @param hexString a string containing the hex value of every byte in the data.
      * @return data a byte array containing the record data.
      */
-    public static byte[] hexStringToByteArray(String hexString) {
+    public static byte[] hexStringtoByteArray(String hexString) {
         byte[] bytes = new byte[hexString.length() / 2];
         for (int i = 0; i < bytes.length; i++) {
             String s = hexString.substring(i * 2, i * 2 + 2);
@@ -414,49 +395,32 @@ public class DNSMessage {
 
     /**
      * Add an encoded name to the message. It is added at the current position and uses compression
-     * as much as possible.  Make sure you understand the compressed data format of DNS names.
+     * as much as possible.  Compression is accomplished by remembering the position of every added
+     * label.
      *
      * @param name The name to be added
      */
     public void addName(String name) {
-        if (!name.isEmpty()) {
-            // full match
-            if (hm.get(name) != null) {
-                int pos = hm.get(name);
-                this.buffer.putShort((short) (pos | 0xc000));
+        String label;
+        while (name.length() > 0) {
+            Integer offset = nameToPosition.get(name);
+            if (offset != null) {
+                int pointer = offset;
+                pointer |= PtrShortMask;
+                buffer.putShort((short) pointer);
                 return;
-            }
-
-            hm.put(name, this.buffer.position());
-
-            // insert first name element
-            String[] nameArray = name.split("\\.");
-            if (nameArray.length > 1) {
-                int length = nameArray[0].length();
-                this.buffer.put((byte) length);
-                for (char c : nameArray[0].toCharArray()) {
-                    this.buffer.put((byte) c);
-                }
-
-                //join back array
-                String newName = "";
-                for (int i = 1; i < nameArray.length; i++) {
-                    newName += nameArray[i] + ".";
-                }
-                if (!newName.isEmpty()) {
-                    newName = newName.substring(0, newName.length() - 1);
-                }
-                addName(newName);
             } else {
-                // nameArray length == 1
-                int length = name.length();
-                this.buffer.put((byte) length);
-                for (char c : name.toCharArray()) {
-                    this.buffer.put((byte) c);
+                nameToPosition.put(name, buffer.position());
+                int dot = name.indexOf('.');
+                label = (dot > 0) ? name.substring(0, dot) : name;
+                buffer.put((byte) label.length());
+                for (int j = 0; j < label.length(); j++) {
+                    buffer.put((byte) label.charAt(j));
                 }
-                this.buffer.put((byte) 0);
+                name = (dot > 0) ? name.substring(dot + 1) : "";
             }
         }
+        buffer.put((byte) 0);
     }
 
     /**
@@ -465,13 +429,10 @@ public class DNSMessage {
      * @param question The question to be added
      */
     public void addQuestion(DNSQuestion question) {
-        // DONE: Complete this method
         addName(question.getHostName());
         addQType(question.getRecordType());
         addQClass(question.getRecordClass());
-
-        this.qdcount++;
-        setQDCount(this.qdcount);
+        setQDCount(getQDCount() + 1);
     }
 
     /**
@@ -488,87 +449,60 @@ public class DNSMessage {
      * Add an encoded resource record to the message at the current position.
      *
      * @param rr      The resource record to be added
-     * @param section Indicates the section to which the resource record is added.
-     *                It is one of "answer", "nameserver", or "additional".
+     * @param section Indicates the section to which the resource record is added
      */
     public void addResourceRecord(ResourceRecord rr, String section) {
-        switch (section) {
-            case "answer":
-                this.ancount++;
-                setANCount(this.ancount);
-                break;
-            case "nameserver":
-                this.nscount++;
-                setNSCount(this.nscount);
-                break;
-            case "additional":
-                this.arcount++;
-                setARCount(this.arcount);
-                break;
-            default:
-                // no resource record, should not come here
-                return;
-        }
-
-        // NAME, TYPE, CLASS
         addName(rr.getHostName());
         addQType(rr.getRecordType());
         addQClass(rr.getRecordClass());
+        String cname;
+        String mxname;
+        String nsname;
+        byte[] rdata;
 
-        // TTL
-        long ttl = rr.getRemainingTTL();
-        this.buffer.putInt((int) ttl);
-
-        // RDLENGTH (filler for now)
-        this.buffer.putShort((short) 0);
-
-        int rdataStartPos = this.buffer.position();
-
-        int rtCode = rr.getRecordType().getCode();
-
-        if (rtCode == 1) {
-            // A
-            String s = rr.getInetResult().getHostAddress();
-            String[] sArray = s.split("\\.");
-            for (String value : sArray) {
-                this.buffer.put((byte) Integer.parseInt(value));
-            }
-        } else if (rtCode == 2 || rtCode == 5) {
-            // NS, CNAME
-            addName(rr.getTextResult());
-        } else if (rtCode == 15) {
-            // MX, PREFERENCE and EXCHANGE format
-            this.buffer.putShort((short) 0);
-            addName(rr.getTextResult());
-        } else if (rtCode == 28) {
-            // AAAA
-            String ipv6 = rr.getInetResult().getHostAddress();
-            String[] ipv6Array = ipv6.split(":");
-            byte[] byteArray;
-            for (String value : ipv6Array) {
-                if (value.equals("") || value.equals("0")) {
-                    // 0 or uncompressed
-                    this.buffer.putShort((short) 0);
-                } else {
-                    // add 0 in the front until length is 4
-                    String s = value;
-                    for (int j = value.length(); j < 4; j++) {
-                        s = "0" + s;
-                    }
-                    byteArray = hexStringToByteArray(s);
-                    this.buffer.put(byteArray[0]);
-                    this.buffer.put(byteArray[1]);
-                }
-            }
+        buffer.putInt((int) rr.getRemainingTTL());
+        int startpos = buffer.position();
+        buffer.putShort((short) 0);
+        if (rr.getRecordType() == RecordType.A && rr.getRecordClass() == RecordClass.IN) {
+            InetAddress address = rr.getInetResult();
+            rdata = address.getAddress();
+            assert rdata.length == 4;
+            buffer.put(rdata, 0, rdata.length);
+        } else if (rr.getRecordType() == RecordType.AAAA && rr.getRecordClass() == RecordClass.IN) {
+            InetAddress address = rr.getInetResult();
+            rdata = address.getAddress();
+            assert rdata.length == 16;
+            buffer.put(rdata, 0, rdata.length);
+        } else if (rr.getRecordType() == RecordType.CNAME) {
+            cname = rr.getTextResult();
+            addName(cname);
+        } else if (rr.getRecordType() == RecordType.MX) {
+            short pref = (short) 0;
+            buffer.putShort(pref);
+            mxname = rr.getTextResult();
+            addName(mxname);
+        } else if (rr.getRecordType() == RecordType.NS) {
+            nsname = rr.getTextResult();
+            addName(nsname);
         } else {
-            // SOA, OTHER
+            rdata = hexStringtoByteArray(rr.getTextResult());
+            buffer.put(rdata);
         }
+        int endpos = buffer.position();
+        int rdatalen = endpos - startpos - 2;
+        buffer.putShort(startpos, (short) rdatalen);
+        switch (section) {
+            case "answer":
+                setANCount(getANCount() + 1);
+                break;
+            case "nameserver":
+                setNSCount(getNSCount() + 1);
+                break;
+            case "additional":
+                setARCount(getARCount() + 1);
+                break;
 
-
-        // calculate and add RDLENGTH
-        int rdataEndPosPos = this.buffer.position();
-        int textLengthInBytes = rdataEndPosPos - rdataStartPos;
-        this.buffer.putShort(rdataStartPos - 2, (short) textLengthInBytes);
+        }
     }
 
     /**
@@ -577,7 +511,8 @@ public class DNSMessage {
      * @param recordType The type to be added
      */
     private void addQType(RecordType recordType) {
-        this.buffer.putShort((short) recordType.getCode());
+        short qtype = (short) recordType.getCode();
+        buffer.putShort(qtype);
     }
 
     /**
@@ -586,7 +521,8 @@ public class DNSMessage {
      * @param recordClass The class to be added
      */
     private void addQClass(RecordClass recordClass) {
-        this.buffer.putShort((short) recordClass.getCode());
+        short qclass = (short) recordClass.getCode();
+        buffer.putShort(qclass);
     }
 
     /**
@@ -596,12 +532,11 @@ public class DNSMessage {
      * @return A byte array containing this message's data
      */
     public byte[] getUsed() {
-        int length = this.buffer.position();
-        byte[] result = new byte[length];
-        for (int i = 0; i < length; i++) {
-            result[i] = this.buffer.get(i);
-        }
-        return result;
+        int length = buffer.position();
+        byte[] res = new byte[length];
+        buffer.position(0);
+        buffer.get(res, 0, length);
+        return res;
     }
 
     /**
@@ -622,9 +557,5 @@ public class DNSMessage {
         if (error >= 0 && error < errors.length)
             return errors[error];
         return "Invalid error message";
-    }
-
-    public void getPos() {
-        System.out.println("Position :" + this.buffer.position());
     }
 }
