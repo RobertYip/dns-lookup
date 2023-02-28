@@ -18,41 +18,27 @@ public class DNSLookupService {
     private final DatagramSocket socket;
 
     //todo rather than using String[], maybe use arrayList
-//    private static final List<String> rootServers = Arrays.asList(
-//            "a.root-servers.net",
-//            "b.root-servers.net",
-//            "c.root-servers.net",
-//            "d.root-servers.net",
-//            "e.root-servers.net",
-//            "f.root-servers.net",
-//            "g.root-servers.net",
-//            "h.root-servers.net",
-//            "i.root-servers.net",
-//            "j.root-servers.net",
-//            "k.root-servers.net",
-//            "l.root-servers.net",
-//            "m.root-servers.net"
-//    );
     private static final String[][] rootServers = {
-            { "a.root-servers.net", "198.41.0.4" },
-            { "b.root-servers.net", "199.9.14.201" },
-            { "c.root-servers.net", "192.33.4.12" },
-            { "d.root-servers.net", "199.7.91.13" },
-            { "e.root-servers.net", "192.203.230.10" },
-            { "f.root-servers.net", "192.5.5.241" },
-            { "g.root-servers.net", "192.112.36.4" },
-            { "h.root-servers.net", "198.97.190.53" },
-            { "i.root-servers.net", "192.36.148.17" },
-            { "j.root-servers.net", "192.58.128.30" },
-            { "k.root-servers.net", "193.0.14.129" },
-            { "l.root-servers.net", "199.7.83.42" },
-            { "m.root-servers.net", "202.12.27.33" }
+            {"a.root-servers.net", "198.41.0.4"},
+            {"b.root-servers.net", "199.9.14.201"},
+            {"c.root-servers.net", "192.33.4.12"},
+            {"d.root-servers.net", "199.7.91.13"},
+            {"e.root-servers.net", "192.203.230.10"},
+            {"f.root-servers.net", "192.5.5.241"},
+            {"g.root-servers.net", "192.112.36.4"},
+            {"h.root-servers.net", "198.97.190.53"},
+            {"i.root-servers.net", "192.36.148.17"},
+            {"j.root-servers.net", "192.58.128.30"},
+            {"k.root-servers.net", "193.0.14.129"},
+            {"l.root-servers.net", "199.7.83.42"},
+            {"m.root-servers.net", "202.12.27.33"}
     };
+
     /**
      * Creates a new lookup service. Also initializes the datagram socket object with a default timeout.
      *
-     * @param verbose    A DNSVerbosePrinter listener object with methods to be called at key events in the query
-     *                   processing.
+     * @param verbose A DNSVerbosePrinter listener object with methods to be called at key events in the query
+     *                processing.
      * @throws SocketException      If a DatagramSocket cannot be created.
      * @throws UnknownHostException If the nameserver is not a valid server.
      */
@@ -72,9 +58,9 @@ public class DNSLookupService {
     /**
      * Examines a set of resource records to see if any of them are an answer to the given question.
      *
-     * @param rrs       The set of resource records to be examined
-     * @param question  The DNS question
-     * @return          true if the collection of resource records contains an answer to the given question.
+     * @param rrs      The set of resource records to be examined
+     * @param question The DNS question
+     * @return true if the collection of resource records contains an answer to the given question.
      */
     private boolean containsAnswer(Collection<ResourceRecord> rrs, DNSQuestion question) {
         for (ResourceRecord rr : rrs) {
@@ -123,35 +109,44 @@ public class DNSLookupService {
      * Answers one question.  If there are valid (not expired) results in the cache, returns these results.
      * Otherwise it chooses the best nameserver to query, retrieves results from that server
      * (using individualQueryProcess which adds all the results to the cache) and repeats until either:
-     *   the cache contains an answer to the query, or
-     *   the cache contains an answer to the query that is a CNAME record rather than the requested type, or
-     *   every "best" nameserver in the cache has already been tried.
+     * the cache contains an answer to the query, or
+     * the cache contains an answer to the query that is a CNAME record rather than the requested type, or
+     * every "best" nameserver in the cache has already been tried.
      *
-     *  @param question Host name and record type/class to be used for the query.
+     * @param question Host name and record type/class to be used for the query.
      */
     /* TODO: To be implemented by the student */
     public Collection<ResourceRecord> iterativeQuery(DNSQuestion question)
             throws DNSErrorException {
         Set<ResourceRecord> ans = new HashSet<>();
-        /* Available in cache */
-        Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
-        for (ResourceRecord cacheResult : cacheResults){
-            if (!cacheResult.isExpired()) ans.add(cacheResult);
-        }
-        if (containsAnswer(ans, question)) return ans;
 
-        /* Query rootserver */
+        // Available in cache
+        Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
+        for (ResourceRecord cacheRR : cacheResults) {
+            if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
+        }
+
+        if (containsAnswer(cacheResults, question)) {
+            return cacheResults;
+        }
+
+        // Query rootserver
         InetAddress server = null;
         List<ResourceRecord> serverList = cache.getBestNameservers(question);
-        System.out.println(serverList.get(0).getTextResult());
+        // use first server
         try {
-            String firstServer = serverList.remove(0).getTextResult();
-            server = InetAddress.getByName(firstServer);
+            ResourceRecord ss = serverList.remove(0);
+            String ssName = ss.getTextResult();
+            DNSQuestion serverQuestion = new DNSQuestion(ssName,RecordType.A,RecordClass.IN);
+            Collection<ResourceRecord> serverCollection = cache.getCachedResults(serverQuestion);
+            server = serverCollection.iterator().next().getInetResult();
+            System.out.println("ServerA " + server);
         } catch (Exception e){
+            throw new DNSErrorException("Index out of bounds in server remove(0): " + e);
         }
-
+  
         List<InetAddress> triedServers = new ArrayList<>();
-        /* Iterate servers */
+        // Iterate servers
         while (!containsAnswer(ans, question)){
             ans = individualQueryProcess(question, server);
             List<ResourceRecord> cacheAns = cache.getCachedResults(question);
@@ -222,6 +217,7 @@ public class DNSLookupService {
             ans.clear();
         }
         return null;
+
     }
 
     /**
@@ -241,7 +237,6 @@ public class DNSLookupService {
      * received in the response.
      * @throws DNSErrorException if the Rcode in the response is non-zero
      */
-    /* TODO: To be implemented by the student */
     public Set<ResourceRecord> individualQueryProcess(DNSQuestion question, InetAddress server)
             throws DNSErrorException {
         int attemptNumber = MAX_QUERY_ATTEMPTS;
@@ -249,36 +244,38 @@ public class DNSLookupService {
         /* Build and Send */
         DNSMessage responseMsg;
         DatagramPacket packet = null;
-        DNSMessage msg = buildQuery(question);
-        byte[] msgBuf = msg.getUsed();
-        packet = new DatagramPacket(msgBuf, msgBuf.length, server, DEFAULT_DNS_PORT);
+        DNSMessage reqMsg = buildQuery(question);
+        byte[] reqMsgBuf = reqMsg.getUsed();
 
-        while (attemptNumber > 0) {
-            try {
-                verbose.printQueryToSend(question, server, msg.getID());
-                socket.send(packet);
-                // allocate space and receive
+        try {
+            verbose.printQueryToSend(question, server, reqMsg.getID());
+            packet = new DatagramPacket(reqMsgBuf, reqMsgBuf.length, server, DEFAULT_DNS_PORT);
+            socket.send(packet);
+            // allocate space and receive
+            while (attemptNumber > 0) {
                 byte[] buf = new byte[512];
                 packet = new DatagramPacket(buf, buf.length);
-                while (true) {
+                try {
                     socket.receive(packet);
-                    try {
-                        byte[] data = packet.getData();
-                        int dataLength = packet.getLength();
-                        responseMsg = new DNSMessage(data, dataLength);
-                        if (responseMsg.getID() == msg.getID()) {
-                            Set<ResourceRecord> responses = processResponse(responseMsg);
-                            return responses;
-                        }
-                    } catch (Exception e){
-                        // not response; ignore
+                    byte[] data = packet.getData();
+                    int dataLength = packet.getLength();
+                    responseMsg = new DNSMessage(data, dataLength);
+                    if (responseMsg.getRcode() != 0)
+                        throw new DNSErrorException("R-code is " + responseMsg.getRcode());
+
+                    if (responseMsg.getQR() && responseMsg.getID() == reqMsg.getID()) {
+                        Set<ResourceRecord> responses = processResponse(responseMsg);
+                        return responses;
                     }
+                } catch (SocketTimeoutException e) {
+                    verbose.printQueryToSend(question, server, reqMsg.getID());
+                    packet = new DatagramPacket(reqMsgBuf, reqMsgBuf.length, server, DEFAULT_DNS_PORT);
+                    socket.send(packet);
+                    attemptNumber--;
                 }
-            } catch (SocketTimeoutException e) {
-                attemptNumber--;
-            } catch (IOException e) {
-                throw new DNSErrorException("socket receive fail: " + e);
             }
+        } catch (IOException e) {
+            // for socket.send()
         }
         return null;
     }
@@ -290,11 +287,11 @@ public class DNSLookupService {
      * function returns, the message's buffer's position (`message.buffer.position`) must be equivalent
      * to the size of the query data.
      *
-     * @param question    Host name and record type/class to be used for the query.
+     * @param question Host name and record type/class to be used for the query.
      * @return The DNSMessage containing the query.
      */
     public DNSMessage buildQuery(DNSQuestion question) {
-        short randomId = (short)random.nextInt(65536);
+        short randomId = (short) random.nextInt(65536);
         DNSMessage message = new DNSMessage(randomId);
         message.setQR(false); // this message is a query
         message.addQuestion(question);
@@ -326,7 +323,7 @@ public class DNSLookupService {
             DNSQuestion q = message.getQuestion();
             int anCount = message.getANCount();
             verbose.printAnswersHeader(anCount);
-            while (anCount > 0){
+            while (anCount > 0) {
                 ResourceRecord rr = message.getRR();
                 verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
                 ans.add(rr);
@@ -336,7 +333,7 @@ public class DNSLookupService {
 
             int nsCount = message.getNSCount();
             verbose.printNameserversHeader(nsCount);
-            while (nsCount > 0){
+            while (nsCount > 0) {
                 ResourceRecord rr = message.getRR();
                 verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
                 ans.add(rr);
@@ -346,7 +343,7 @@ public class DNSLookupService {
 
             int arCount = message.getARCount();
             verbose.printAdditionalInfoHeader(arCount);
-            while (arCount > 0){
+            while (arCount > 0) {
                 ResourceRecord rr = message.getRR();
                 verbose.printIndividualResourceRecord(rr, rr.getRecordType().getCode(), rr.getRecordClass().getCode());
                 ans.add(rr);
@@ -354,7 +351,7 @@ public class DNSLookupService {
                 arCount--;
             }
 
-        } catch(Exception e){
+        } catch (Exception e) {
             // break
             // include out of bounds for message.getRR
         }
