@@ -119,16 +119,12 @@ public class DNSLookupService {
     public Collection<ResourceRecord> iterativeQuery(DNSQuestion question)
             throws DNSErrorException {
         Set<ResourceRecord> ans = new HashSet<>();
-        System.out.println("START QUESTION: " + question);
         // Available in cache
         Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
-        for (ResourceRecord cacheRR : cacheResults) {
-            if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
-        }
-        if (containsAnswer(cacheResults, question)) {
-            System.out.println("129 returning cache");
-            return cacheResults;
-        }
+        if (cacheResults.size() > 0) return cacheResults;
+//        for (ResourceRecord cacheRR : cacheResults) {
+//            if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
+//        }
 
         // Query rootserver
         InetAddress server = null;
@@ -144,52 +140,42 @@ public class DNSLookupService {
         // Iterate servers
 
         while (!containsAnswer(ans, question)) {
-            System.out.println("146 server " + server);
             Set<ResourceRecord> queryList;
             try {
                 queryList = individualQueryProcess(question, server);
             }catch (DNSErrorException e){
                 return null;
             }
-            System.out.println("QUERYLIST " + queryList);
             // update cache
             cacheResults = cache.getCachedResults(question);
             for (ResourceRecord cacheRR : cacheResults) {
                 if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
             }
             if (containsAnswer(cacheResults, question)) {
-                System.out.println("found cache answer to q: " + question);
                 return cacheResults;
             }
-
-            // todo extract out cname and run it on separate loop, want to prioritize using it first.
-            // todo if cname found, skip the loop below
+            
             for (ResourceRecord rr: queryList) {
                 if (rr.getRecordType() == RecordType.CNAME) {
-                    System.out.println("cname " + rr.getTextResult());
                     cache.addResult(rr);
                     ans.add(rr);
                 }
+                if (ans.size() > 0) return ans;
             }
             for (ResourceRecord rr: queryList){
-                System.out.println("not cname " + rr);
                 cache.addResult(rr);
 
 
                 if (rr.getRecordType() == RecordType.NS) {
-                    System.out.println("NS LOOP");
                     String nextServer = rr.getTextResult();
                     DNSQuestion q = new DNSQuestion(nextServer, RecordType.A, RecordClass.IN);
                     Collection<ResourceRecord> nextServerList = cache.getCachedResults(q);
                     if(nextServerList.isEmpty()) {
                         nextServerList = iterativeQuery(q);
                     }
-                    System.out.println("nextServerList " + nextServerList);
                     server = nextServerList.iterator().next().getInetResult();
-                    System.out.println("server " + server);
                     break;
                 } else if (rr.getRecordType() == RecordType.A){
-                    System.out.println("A type");
                     server = rr.getInetResult();
                     break;
                 }
