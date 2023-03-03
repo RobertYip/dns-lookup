@@ -126,126 +126,77 @@ public class DNSLookupService {
             if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
         }
         if (containsAnswer(cacheResults, question)) {
+            System.out.println("129 returning cache");
             return cacheResults;
         }
 
         // Query rootserver
         InetAddress server = null;
         List<ResourceRecord> serverList = cache.getBestNameservers(question);
-        // use first server
-        try {
-            ResourceRecord ss = serverList.get(0);
-            if (ss.getQuestion() == cache.rootQuestion) {
-                String ssName = ss.getTextResult();
-                DNSQuestion serverQuestion = new DNSQuestion(ssName, RecordType.A, RecordClass.IN);
-                Collection<ResourceRecord> serverCollection = cache.getCachedResults(serverQuestion);
 
-                server = serverCollection.iterator().next().getInetResult();
-            } else {
-                if (ss.getRecordType() == RecordType.A) {
-                    server = ss.getInetResult();
-                } else {
-                    String hostName = ss.getTextResult();
-                    DNSQuestion q = new DNSQuestion(hostName, RecordType.A, RecordClass.IN);
-                    Collection<ResourceRecord> serverCollection = cache.getCachedResults(q);
-                    System.out.println(152);
-                    System.out.println("server size: " + serverCollection.size());
-                    if (serverCollection.size() == 0) return null;
-                    server = serverCollection.iterator().next().getInetResult();
-                }
-            }
-        } catch (Exception e){
-            throw new DNSErrorException("159 error " + e);
-        }
+        // use first server
+        String rootServer = serverList.get(0).getTextResult();
+        DNSQuestion serverQuestion = new DNSQuestion(rootServer, RecordType.A, RecordClass.IN);
+        Collection<ResourceRecord> rootServerList = cache.getCachedResults(serverQuestion);
+        server = rootServerList.iterator().next().getInetResult();
+
         List<InetAddress> triedServers = new ArrayList<>();
         // Iterate servers
+
         while (!containsAnswer(ans, question)) {
-            ans = individualQueryProcess(question, server);
-            // remove expired
-            for (ResourceRecord rr : ans) {
-                if (rr.isExpired()) ans.remove(rr);
-            }
-            if (ans.size() == 0) return null; //todo will need to backtrack
-            List<ResourceRecord> cacheAns = cache.getCachedResults(question);
-
-            if (containsAnswer(cacheAns, question)) return cacheAns;
-            for (ResourceRecord ca : cacheAns) {
-                if (ca.getRecordType() == RecordType.CNAME) {
-                    DNSQuestion q = new DNSQuestion(ca.getTextResult(), question.getRecordType(), question.getRecordClass());
-                    Collection<ResourceRecord> crrList = iterativeQuery(q);
-                    System.out.println(177);
-                    for (ResourceRecord crr : crrList){
-                        cache.addResult(crr);
-                    }
-                    return cache.getCachedResults(question);
-                }
-            }
-            // todo revisit later
-            if (ans == null) {
-                // Pick a different server
-                if (serverList.size() == 0) {
-                    return null;
-                } else {
-                    String strServer =serverList.remove(0).getTextResult();
-                    DNSQuestion q = new DNSQuestion(strServer, RecordType.A, RecordClass.IN);
-                    Collection<ResourceRecord> serverCollection = cache.getCachedResults(q);
-                    server = serverCollection.iterator().next().getInetResult();
-                    continue;
-                }
-            }
-            ResourceRecord rr = ans.iterator().next();
+            System.out.println("146 server " + server);
+            Set<ResourceRecord> queryList;
             try {
-                InetAddress serverToTry = null;
-                if (rr.getRecordType() == RecordType.A) {
-                    serverToTry = rr.getInetResult();
-                } else if (rr.getRecordType() == RecordType.NS) {
-                    String hostName = rr.getTextResult();
-                    DNSQuestion q = new DNSQuestion(hostName, RecordType.A, RecordClass.IN);
-                    Collection<ResourceRecord> serverCollection = cache.getCachedResults(q);
-                    serverToTry = serverCollection.iterator().next().getInetResult(); // todo problem is probably here
-                } else if (rr.getRecordType() == RecordType.CNAME){
-                    cacheAns.add(rr);
-                }
-                while (triedServers.contains(serverToTry)) {
-                    rr = ans.iterator().next();
-                    ans.remove(rr);
-                }
-            } catch (NoSuchElementException e) {
-                // all servers exhausted
-                System.out.println(212);
-                System.out.println("cacheAns " + cacheAns);
-                return cacheAns;
-            } catch (Exception e) {
-                // getInetResult exception, do nothing
+                queryList = individualQueryProcess(question, server);
+            }catch (DNSErrorException e){
+                return null;
+            }
+            System.out.println("QUERYLIST " + queryList);
+            // update cache
+            cacheResults = cache.getCachedResults(question);
+            for (ResourceRecord cacheRR : cacheResults) {
+                if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
+            }
+            if (containsAnswer(cacheResults, question)) {
+                System.out.println("found cache answer to q: " + question);
+                return cacheResults;
             }
 
-            int rtCode = rr.getRecordType().getCode();
-            if (rtCode == 1){
-                // A
-                server = rr.getInetResult();
-            } else if (rtCode == 2){
-                // NS
-                String hostName = rr.getTextResult();
-                DNSQuestion q = new DNSQuestion(hostName, RecordType.A, RecordClass.IN);
-                Collection<ResourceRecord> serverCollection = cache.getCachedResults(q);
-                server = serverCollection.iterator().next().getInetResult();
-            } else if (rtCode == 5){
-                // CNAME
-                System.out.println(230);
-                return cacheAns;
-            } else if (rtCode == 15){
-                // MX
-            } else if (rtCode == 28){
-                // AAAA
-                server = rr.getInetResult();
-            } else {
-
+            // todo extract out cname and run it on separate loop, want to prioritize using it first.
+            // todo if cname found, skip the loop below
+            for (ResourceRecord rr: queryList) {
+                if (rr.getRecordType() == RecordType.CNAME) {
+                    System.out.println("cname " + rr.getTextResult());
+                    cache.addResult(rr);
+                    ans.add(rr);
+                }
             }
-            if (server == null) break;
-            triedServers.add(server);
-            ans.clear();
+            for (ResourceRecord rr: queryList){
+                System.out.println("not cname " + rr);
+                cache.addResult(rr);
+
+
+                if (rr.getRecordType() == RecordType.NS) {
+                    System.out.println("NS LOOP");
+                    String nextServer = rr.getTextResult();
+                    DNSQuestion q = new DNSQuestion(nextServer, RecordType.A, RecordClass.IN);
+                    Collection<ResourceRecord> nextServerList = cache.getCachedResults(q);
+                    if(nextServerList.isEmpty()) {
+                        nextServerList = iterativeQuery(q);
+                    }
+                    System.out.println("nextServerList " + nextServerList);
+                    server = nextServerList.iterator().next().getInetResult();
+                    System.out.println("server " + server);
+                    break;
+                } else if (rr.getRecordType() == RecordType.A){
+                    System.out.println("A type");
+                    server = rr.getInetResult();
+                    break;
+                }
+            }
         }
-        return null;
+
+        return ans;
 
     }
 
