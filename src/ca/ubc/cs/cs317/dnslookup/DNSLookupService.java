@@ -122,10 +122,7 @@ public class DNSLookupService {
         // Available in cache
         Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
         if (cacheResults.size() > 0) return cacheResults;
-//        for (ResourceRecord cacheRR : cacheResults) {
-//            if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
-//        }
-
+        
         // Query rootserver
         InetAddress server = null;
         List<ResourceRecord> serverList = cache.getBestNameservers(question);
@@ -137,15 +134,26 @@ public class DNSLookupService {
         server = rootServerList.iterator().next().getInetResult();
 
         List<InetAddress> triedServers = new ArrayList<>();
-        // Iterate servers
+        Stack<InetAddress> serverStack = new Stack<>();
+        serverStack.push(server);
 
-        while (!containsAnswer(ans, question)) {
+        while (serverStack.size() > 0) {
+            server = serverStack.pop();
+            if (triedServers.contains(server)) continue;
+            triedServers.add(server);
+
             Set<ResourceRecord> queryList;
             try {
                 queryList = individualQueryProcess(question, server);
             }catch (DNSErrorException e){
                 return null;
             }
+
+            // add to cache first
+            for (ResourceRecord rr: queryList) {
+                cache.addResult(rr);
+            }
+
             // update cache
             cacheResults = cache.getCachedResults(question);
             for (ResourceRecord cacheRR : cacheResults) {
@@ -154,36 +162,28 @@ public class DNSLookupService {
             if (containsAnswer(cacheResults, question)) {
                 return cacheResults;
             }
-            
+
+            // check cname
             for (ResourceRecord rr: queryList) {
                 if (rr.getRecordType() == RecordType.CNAME) {
-                    cache.addResult(rr);
                     ans.add(rr);
                 }
                 if (ans.size() > 0) return ans;
             }
-            for (ResourceRecord rr: queryList){
-                cache.addResult(rr);
 
-
+            for (ResourceRecord rr: queryList) {
                 if (rr.getRecordType() == RecordType.NS) {
                     String nextServer = rr.getTextResult();
                     DNSQuestion q = new DNSQuestion(nextServer, RecordType.A, RecordClass.IN);
                     Collection<ResourceRecord> nextServerList = cache.getCachedResults(q);
-                    if(nextServerList.isEmpty()) {
+                    if (nextServerList.isEmpty()) {
                         nextServerList = iterativeQuery(q);
                     }
-                    server = nextServerList.iterator().next().getInetResult();
-                    break;
-                } else if (rr.getRecordType() == RecordType.A){
-                    server = rr.getInetResult();
-                    break;
+                    serverStack.push(nextServerList.iterator().next().getInetResult());
                 }
             }
         }
-
         return ans;
-
     }
 
     /**
