@@ -17,22 +17,6 @@ public class DNSLookupService {
     private final DNSVerbosePrinter verbose;
     private final DatagramSocket socket;
 
-    //todo rather than using String[], maybe use arrayList
-    private static final String[][] rootServers = {
-            {"a.root-servers.net", "198.41.0.4"},
-            {"b.root-servers.net", "199.9.14.201"},
-            {"c.root-servers.net", "192.33.4.12"},
-            {"d.root-servers.net", "199.7.91.13"},
-            {"e.root-servers.net", "192.203.230.10"},
-            {"f.root-servers.net", "192.5.5.241"},
-            {"g.root-servers.net", "192.112.36.4"},
-            {"h.root-servers.net", "198.97.190.53"},
-            {"i.root-servers.net", "192.36.148.17"},
-            {"j.root-servers.net", "192.58.128.30"},
-            {"k.root-servers.net", "193.0.14.129"},
-            {"l.root-servers.net", "199.7.83.42"},
-            {"m.root-servers.net", "202.12.27.33"}
-    };
 
     /**
      * Creates a new lookup service. Also initializes the datagram socket object with a default timeout.
@@ -115,72 +99,73 @@ public class DNSLookupService {
      *
      * @param question Host name and record type/class to be used for the query.
      */
-    /* TODO: To be implemented by the student */
     public Collection<ResourceRecord> iterativeQuery(DNSQuestion question)
             throws DNSErrorException {
         Set<ResourceRecord> ans = new HashSet<>();
         // Available in cache
         Collection<ResourceRecord> cacheResults = cache.getCachedResults(question);
         if (cacheResults.size() > 0) return cacheResults;
-        
+
         // Query rootserver
         InetAddress server = null;
+        Set<InetAddress> tried = new HashSet<>();
         List<ResourceRecord> serverList = cache.getBestNameservers(question);
+        Set<ResourceRecord> serversNotTried = new HashSet<>();
 
         // use first server
-        String rootServer = serverList.get(0).getTextResult();
-        DNSQuestion serverQuestion = new DNSQuestion(rootServer, RecordType.A, RecordClass.IN);
+        String strServer = serverList.get(0).getTextResult();
+        DNSQuestion serverQuestion = new DNSQuestion(strServer, RecordType.A, RecordClass.IN);
         Collection<ResourceRecord> rootServerList = cache.getCachedResults(serverQuestion);
         server = rootServerList.iterator().next().getInetResult();
-
-        List<InetAddress> triedServers = new ArrayList<>();
-        Stack<InetAddress> serverStack = new Stack<>();
-        serverStack.push(server);
-
-        while (serverStack.size() > 0) {
-            server = serverStack.pop();
-            if (triedServers.contains(server)) continue;
-            triedServers.add(server);
-
-            Set<ResourceRecord> queryList;
-            try {
-                queryList = individualQueryProcess(question, server);
-            }catch (DNSErrorException e){
-                return null;
+        // Iterate servers
+        while (serverList.size() >= 0) {
+            if (serverList.size() == 0){
+                if (serversNotTried.size() > 0) {
+                    serverList.addAll(serversNotTried);
+                    serversNotTried.clear();
+                    continue;
+                } else{
+                    return ans;
+                }
             }
-
-            // add to cache first
-            for (ResourceRecord rr: queryList) {
+            for (ResourceRecord rr : serverList){
                 cache.addResult(rr);
             }
-
-            // update cache
             cacheResults = cache.getCachedResults(question);
-            for (ResourceRecord cacheRR : cacheResults) {
-                if (cacheRR.isExpired()) cacheResults.remove(cacheRR);
-            }
-            if (containsAnswer(cacheResults, question)) {
-                return cacheResults;
-            }
+            if (cacheResults.size() > 0) return cacheResults;
 
-            // check cname
-            for (ResourceRecord rr: queryList) {
-                if (rr.getRecordType() == RecordType.CNAME) {
+            ResourceRecord currServer = serverList.remove(0);
+
+            //cname
+            if (currServer.getRecordType() == RecordType.CNAME) {
+                ans.add(currServer);
+                DNSQuestion q = new DNSQuestion(currServer.getTextResult(), question.getRecordType(), question.getRecordClass());
+                Collection<ResourceRecord> cnameList = iterativeQuery(q);
+                for (ResourceRecord rr : cnameList) {
                     ans.add(rr);
                 }
-                if (ans.size() > 0) return ans;
+                return ans;
             }
 
-            for (ResourceRecord rr: queryList) {
-                if (rr.getRecordType() == RecordType.NS) {
-                    String nextServer = rr.getTextResult();
-                    DNSQuestion q = new DNSQuestion(nextServer, RecordType.A, RecordClass.IN);
-                    Collection<ResourceRecord> nextServerList = cache.getCachedResults(q);
-                    if (nextServerList.isEmpty()) {
-                        nextServerList = iterativeQuery(q);
-                    }
-                    serverStack.push(nextServerList.iterator().next().getInetResult());
+            if (currServer.getRecordType() == RecordType.A) {
+                server = currServer.getInetResult();
+            } else if (currServer.getRecordType() == RecordType.NS) {
+                String nextServer = currServer.getTextResult();
+                DNSQuestion q = new DNSQuestion(nextServer, RecordType.A, RecordClass.IN);
+                Collection<ResourceRecord> nextServerList = cache.getCachedResults(q);
+                if (nextServerList.isEmpty()) {
+                    nextServerList = iterativeQuery(q);
                 }
+                if (nextServerList.isEmpty()) continue;
+                server = nextServerList.iterator().next().getInetResult();
+            }
+            if (tried.contains(server)) continue;
+            tried.add(server);
+
+            Set<ResourceRecord> nextServers = individualQueryProcess(question, server);
+            if (nextServers.size() > 0) {
+                serversNotTried.addAll(serverList);
+                serverList = cache.getBestNameservers(question);
             }
         }
         return ans;

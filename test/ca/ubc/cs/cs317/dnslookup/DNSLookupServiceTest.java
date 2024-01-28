@@ -52,7 +52,6 @@ public class DNSLookupServiceTest {
         Assertions.assertEquals(0, message.getARCount(), "Incorrect number of additional records");
 
         Assertions.assertEquals(question, message.getQuestion(), "Question not correctly encoded");
-
         return receivedTransactionId;
     }
 
@@ -122,9 +121,14 @@ public class DNSLookupServiceTest {
                 Collections.singleton(question),
                 Collections.singleton(new ResourceRecord(question, 3600, InetAddress.getByName("35.24.11.129"))),
                 Collections.emptySet(), Collections.emptySet());
+        Collection<ResourceRecord> answerList = Arrays.asList(new ResourceRecord(question, 16482, InetAddress.getByName("103.233.44.22")),
+                new ResourceRecord(question, 5000, InetAddress.getByName("102.233.44.22")));
+//        Collection<ResourceRecord> authoritativeList = Arrays.asList(new ResourceRecord(question, 16482, "asd.cs.sa"),
+//                new ResourceRecord(question, 5000, "ubc.ca.da"));
         processResponseCommonTest(false, 0,
                 Collections.singleton(question),
-                Collections.singleton(new ResourceRecord(question, 16482, InetAddress.getByName("103.233.44.22"))),
-                Collections.emptySet(), Collections.emptySet());
+                answerList,  // answers
+                Collections.emptySet(),
+                Collections.emptySet());                        // additional
     }
 }
